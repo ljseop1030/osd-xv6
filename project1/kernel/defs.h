@@ -59,6 +59,7 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+uint64          freemem(void);  // Added for project 01
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -101,6 +102,12 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
+//Added for project 01
+int             getnice(int);
+int             setnice(int, int);
+void            ps(int);
+uint64          meminfo(void);
+int             waitpid(int);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

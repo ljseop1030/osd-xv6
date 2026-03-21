@@ -15,6 +15,8 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+//Added for project 01
+extern uint64 freemem(void);
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
@@ -110,7 +112,6 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -124,6 +125,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->nice = 20; //Added for project 01
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -687,4 +689,122 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+int
+getnice(int pid)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      int n = p->nice;
+      release(&p->lock);
+      return n;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+setnice(int pid, int value)
+{
+  struct proc *p;
+  if(value < 0 || value > 39)
+    return -1;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      p->nice = value;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+void
+ps(int pid)
+{
+  struct proc *p;
+  static char *states[] = {
+    [UNUSED]    "unused",
+    [USED]      "used",
+    [SLEEPING]  "sleep",
+    [RUNNABLE]  "runnable",
+    [RUNNING]   "run",
+    [ZOMBIE]    "zombie"
+  };
+
+  int printed = 0;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(pid == 0){
+      if(p->state != UNUSED){
+        if(printed == 0){
+          printf("name\t\tpid\tstate\t\tpriority\n");
+          printed = 1;
+        }
+        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
+      }
+    } else {
+      if(p->pid == pid){
+        printf("name\t\tpid\tstate\t\tpriority\n");
+        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
+        release(&p->lock);
+        return;
+      }
+    }
+    release(&p->lock);
+  }
+}
+
+uint64
+meminfo(void)
+{
+  return freemem();
+}
+
+int
+waitpid(int pid)
+{
+  struct proc *p;
+  struct proc *myp = myproc();
+
+  // pid가 존재하는지 확인
+  int found = 0;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      found = 1;
+      release(&p->lock);
+      break;
+    }
+    release(&p->lock);
+  }
+  if(!found)
+    return -1;
+
+  // 부모인지 확인
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid && p->parent == myp){
+      release(&p->lock);
+      // wait loop
+      while(1){
+        acquire(&p->lock);
+        if(p->state == ZOMBIE){
+          release(&p->lock);
+          return 0;
+        }
+        release(&p->lock);
+        yield();
+      }
+    }
+    release(&p->lock);
+  }
+  return -1;
 }

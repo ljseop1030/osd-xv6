@@ -20,3 +20,9 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
+// added for project 01
+#define SYS_getnice 22
+#define SYS_setnice 23
+#define SYS_ps      24
+#define SYS_meminfo 25
+#define SYS_waitpid 26

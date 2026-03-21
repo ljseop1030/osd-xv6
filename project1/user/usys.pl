@@ -42,3 +42,9 @@ entry("getpid");
 entry("sbrk");
 entry("pause");
 entry("uptime");
+# system calls added in project 1
+entry("getnice");
+entry("setnice");
+entry("ps");
+entry("meminfo");
+entry("waitpid");
