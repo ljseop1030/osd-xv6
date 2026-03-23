@@ -731,12 +731,12 @@ ps(int pid)
 {
   struct proc *p;
   static char *states[] = {
-    [UNUSED]    "unused",
-    [USED]      "used",
-    [SLEEPING]  "sleep",
-    [RUNNABLE]  "runnable",
-    [RUNNING]   "run",
-    [ZOMBIE]    "zombie"
+    [UNUSED]    "UNUSED",
+    [USED]      "USED",
+    [SLEEPING]  "SLEEPING",
+    [RUNNABLE]  "RUNNABLE",
+    [RUNNING]   "RUNNING",
+    [ZOMBIE]    "ZOMBIE"
   };
 
   int printed = 0;
@@ -774,37 +774,33 @@ waitpid(int pid)
   struct proc *p;
   struct proc *myp = myproc();
 
-  // pid가 존재하는지 확인
-  int found = 0;
-  for(p = proc; p < &proc[NPROC]; p++){
-    acquire(&p->lock);
-    if(p->pid == pid){
-      found = 1;
-      release(&p->lock);
-      break;
-    }
-    release(&p->lock);
-  }
-  if(!found)
-    return -1;
+  acquire(&wait_lock);
 
-  // 부모인지 확인
-  for(p = proc; p < &proc[NPROC]; p++){
-    acquire(&p->lock);
-    if(p->pid == pid && p->parent == myp){
-      release(&p->lock);
-      // wait loop
-      while(1){
-        acquire(&p->lock);
+  for(;;){
+    int found = 0;
+
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->pid == pid && p->parent == myp){
+        found = 1;
         if(p->state == ZOMBIE){
+          freeproc(p);
           release(&p->lock);
+          release(&wait_lock);
           return 0;
         }
         release(&p->lock);
-        yield();
+        break;
       }
+      release(&p->lock);
     }
-    release(&p->lock);
+
+    if(!found){
+      release(&wait_lock);
+      return -1;
+    }
+
+    // 자식이 종료될 때까지 sleep (kexit에서 wakeup(p->parent) 호출함)
+    sleep(myp, &wait_lock);
   }
-  return -1;
 }
