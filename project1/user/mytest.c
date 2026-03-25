@@ -19,9 +19,10 @@ void check(const char *test, int actual, int expected)
 int main()
 {
   int ret;
+  int mypid = getpid();
 
   printf("[INFO] init(pid 1) and sh(pid 2) are created during boot.\n");
-  printf("[INFO] mytest(pid 3) should be the current test program.\n");
+  printf("[INFO] mytest(pid %d) is the current test program.\n", mypid);
 
   // ============================================================
   printf("========== Current Process State ==========\n");
@@ -41,6 +42,10 @@ int main()
   // pid 2 (sh) exists, default nice = 20
   ret = getnice(2);
   check("getnice(2) - sh default nice", ret, 20);
+
+  // mytest itself, default nice = 20
+  ret = getnice(mypid);
+  check("getnice(mytest) - mytest default nice", ret, 20);
 
   // pid 12 does not exist → should return -1
   ret = getnice(12);
@@ -76,6 +81,39 @@ int main()
   ret = setnice(1, -1);
   check("setnice(1, -1) - negative nice value", ret, -1);
 
+  // Boundary: minimum valid nice value (0)
+  ret = setnice(1, 0);
+  check("setnice(1, 0) - minimum valid", ret, 0);
+  ret = getnice(1);
+  check("getnice(1) - after setnice to 0", ret, 0);
+  setnice(1, 20); // restore
+
+  // Boundary: maximum valid nice value (39)
+  ret = setnice(1, 39);
+  check("setnice(1, 39) - maximum valid", ret, 0);
+  ret = getnice(1);
+  check("getnice(1) - after setnice to 39", ret, 39);
+  setnice(1, 20); // restore
+
+  printf("\n");
+
+  // ============================================================
+  printf("========== Testing getnice() / setnice() on self ==========\n");
+  // ============================================================
+  // mytest itself — test that a process can read and modify its own nice value
+
+  ret = setnice(mypid, 5);
+  check("setnice(mytest, 5) - set mytest priority", ret, 0);
+
+  ret = getnice(mypid);
+  check("getnice(mytest) - after setnice to 5", ret, 5);
+
+  printf("[INFO] ps(%d) - mytest should show priority 5:\n", mypid);
+  ps(mypid);
+
+  ret = setnice(mypid, 20);
+  check("setnice(mytest, 20) - restore mytest nice", ret, 0);
+
   printf("\n");
 
   // ============================================================
@@ -96,6 +134,15 @@ int main()
   printf("[INFO] ps(12) - no such process, should print nothing:\n");
   ps(12);
   printf("[INFO] (no output expected above)\n");
+  printf("\n");
+
+  // ps reflects setnice changes — set init nice to 7, verify visually, restore
+  setnice(1, 7);
+  printf("[INFO] ps(1) - init priority should show 7:\n");
+  ps(1);
+  setnice(1, 20);
+  printf("[INFO] ps(1) - init priority restored to 20:\n");
+  ps(1);
 
   printf("\n");
 
@@ -112,14 +159,22 @@ int main()
     failed++;
   }
 
+  // Call meminfo twice — both results should be positive and consistent
+  uint64 mem1 = meminfo();
+  uint64 mem2 = meminfo();
+  if (mem1 > 0 && mem2 > 0) {
+    printf("[PASS] meminfo() - consistent: %lu / %lu bytes\n", mem1, mem2);
+    passed++;
+  } else {
+    printf("[FAIL] meminfo() - inconsistent or zero: %lu / %lu\n", mem1, mem2);
+    failed++;
+  }
+
   printf("\n");
 
   // ============================================================
   printf("========== Testing waitpid() ==========\n");
   // ============================================================
-  // Note: waitpid suspends execution until a specific process terminates.
-  // To test this, we use fork() to create child processes that exit immediately,
-  // then verify that waitpid correctly waits for them.
 
   // Test 1: fork a child, then waitpid for it
   int pid1 = fork();
@@ -127,10 +182,8 @@ int main()
     printf("[FAIL] fork() failed\n");
     failed++;
   } else if (pid1 == 0) {
-    // child process — exit immediately
     exit(0);
   } else {
-    // parent — wait for pid1 to terminate
     ret = waitpid(pid1);
     check("waitpid(pid1) - child exited", ret, 0);
   }
@@ -141,22 +194,34 @@ int main()
     printf("[FAIL] fork() failed\n");
     failed++;
   } else if (pid2 == 0) {
-    // child process — exit immediately
     exit(0);
   } else {
-    // parent — wait for pid2 to terminate
     ret = waitpid(pid2);
     check("waitpid(pid2) - child exited", ret, 0);
   }
 
-  // Test 3: waitpid for init (pid 1) — should fail
-  // (init never exits / caller is not init's parent)
+  // Test 3: waitpid for init (pid 1) — not our child, should fail
   ret = waitpid(1);
   check("waitpid(1) - not our child", ret, -1);
 
   // Test 4: waitpid for non-existent pid — should fail
   ret = waitpid(99);
   check("waitpid(99) - no such process", ret, -1);
+
+  // Test 5: waitpid twice on the same pid — second call should fail
+  // after freeproc(), the process slot is released and the pid no longer exists
+  int pid3 = fork();
+  if (pid3 < 0) {
+    printf("[FAIL] fork() failed\n");
+    failed++;
+  } else if (pid3 == 0) {
+    exit(0);
+  } else {
+    ret = waitpid(pid3);
+    check("waitpid(pid3) - first wait", ret, 0);
+    ret = waitpid(pid3);
+    check("waitpid(pid3) - already reaped", ret, -1);
+  }
 
   printf("\n");
 
