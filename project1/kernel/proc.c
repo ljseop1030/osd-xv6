@@ -695,35 +695,40 @@ procdump(void)
 int
 getnice(int pid)
 {
-  struct proc *p;
-  for(p = proc; p < &proc[NPROC]; p++){
-    acquire(&p->lock);
-    if(p->pid == pid){
-      int n = p->nice;
-      release(&p->lock);
-      return n;
+    int i = 0;
+    while (i < NPROC) {
+        struct proc *currentProc = &proc[i];
+        acquire(&currentProc->lock);
+        if (currentProc->pid == pid) {
+            int niceValue = currentProc->nice;
+            release(&currentProc->lock);
+            return niceValue;
+        }
+        release(&currentProc->lock);
+        i = i + 1;
     }
-    release(&p->lock);
-  }
-  return -1;
+    return -1;
 }
 
 int
 setnice(int pid, int value)
 {
-  struct proc *p;
-  if(value < 0 || value > 39)
-    return -1;
-  for(p = proc; p < &proc[NPROC]; p++){
-    acquire(&p->lock);
-    if(p->pid == pid){
-      p->nice = value;
-      release(&p->lock);
-      return 0;
+    if (value < 0 || value > 39) {
+        return -1;  
     }
-    release(&p->lock);
-  }
-  return -1;
+    int i = 0;
+    while (i < NPROC) {
+        struct proc *currentProc = &proc[i];
+        acquire(&currentProc->lock);
+        if (currentProc->pid == pid) {
+            currentProc->nice = value;
+            release(&currentProc->lock);
+            return 0;
+        }
+        release(&currentProc->lock);
+        i = i + 1;
+    }
+    return -1;
 }
 
 void
