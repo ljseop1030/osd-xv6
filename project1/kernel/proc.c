@@ -747,12 +747,21 @@ ps(int pid)
   int i = 0;
   while (i < NPROC){
     struct proc *p = &proc[i];
+
+    if(p == myproc()){  // 자기 자신은 락 없이 처리
+      if(pid == 0 || p->pid == pid){
+        if(printed == 0){ printf("name\t\tpid\tstate\t\tpriority\n"); printed = 1; }
+        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
+        if(pid != 0) return;
+      }
+      i++;
+      continue;
+    }
+
+    acquire(&p->lock);
     if(pid == 0){
       if(p->state != UNUSED){
-        if(printed == 0){
-          printf("name\t\tpid\tstate\t\tpriority\n");
-          printed = 1;
-        }
+        if(printed == 0){ printf("name\t\tpid\tstate\t\tpriority\n"); printed = 1; }
         printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
       }
     } else {
@@ -781,9 +790,9 @@ waitpid(int pid)
 
   acquire(&wait_lock);
 
-  while (true){
+  while (1){
     int found = 0;
-
+    int i = 0;
     while (i < NPROC){
       struct proc *p = &proc[i];
       acquire(&p->lock);
@@ -799,14 +808,14 @@ waitpid(int pid)
         break;
       }
       release(&p->lock);
-      i++
+      i++;
     }
 
     if(!found){
       release(&wait_lock);
       return -1;
     }
-    
+
     // 자식이 종료될 때까지 sleep (kexit에서 wakeup(p->parent) 호출함)
     sleep(myp, &wait_lock);
   }
