@@ -697,14 +697,14 @@ getnice(int pid)
 {
     int i = 0;
     while (i < NPROC) {
-        struct proc *currentProc = &proc[i];
-        acquire(&currentProc->lock);
-        if (currentProc->pid == pid) {
-            int niceValue = currentProc->nice;
-            release(&currentProc->lock);
+        struct proc *p = &proc[i];
+        acquire(&p->lock);
+        if (p->pid == pid) {
+            int niceValue = p->nice;
+            release(&p->lock);
             return niceValue;
         }
-        release(&currentProc->lock);
+        release(&p->lock);
         i = i + 1;
     }
     return -1;
@@ -718,14 +718,14 @@ setnice(int pid, int value)
     }
     int i = 0;
     while (i < NPROC) {
-        struct proc *currentProc = &proc[i];
-        acquire(&currentProc->lock);
-        if (currentProc->pid == pid) {
-            currentProc->nice = value;
-            release(&currentProc->lock);
+        struct proc *p = &proc[i];
+        acquire(&p->lock);
+        if (p->pid == pid) {
+            p->nice = value;
+            release(&p->lock);
             return 0;
         }
-        release(&currentProc->lock);
+        release(&p->lock);
         i = i + 1;
     }
     return -1;
@@ -734,7 +734,6 @@ setnice(int pid, int value)
 void
 ps(int pid)
 {
-  struct proc *p;
   static char *states[] = {
     [UNUSED]    "UNUSED",
     [USED]      "USED",
@@ -745,8 +744,9 @@ ps(int pid)
   };
 
   int printed = 0;
-  for(p = proc; p < &proc[NPROC]; p++){
-    acquire(&p->lock);
+  int i = 0;
+  while (i < NPROC){
+    struct proc *p = &proc[i];
     if(pid == 0){
       if(p->state != UNUSED){
         if(printed == 0){
@@ -764,6 +764,7 @@ ps(int pid)
       }
     }
     release(&p->lock);
+    i++;
   }
 }
 
@@ -776,15 +777,15 @@ meminfo(void)
 int
 waitpid(int pid)
 {
-  struct proc *p;
   struct proc *myp = myproc();
 
   acquire(&wait_lock);
 
-  for(;;){
+  while (true){
     int found = 0;
 
-    for(p = proc; p < &proc[NPROC]; p++){
+    while (i < NPROC){
+      struct proc *p = &proc[i];
       acquire(&p->lock);
       if(p->pid == pid && p->parent == myp){
         found = 1;
@@ -798,13 +799,14 @@ waitpid(int pid)
         break;
       }
       release(&p->lock);
+      i++
     }
 
     if(!found){
       release(&wait_lock);
       return -1;
     }
-
+    
     // 자식이 종료될 때까지 sleep (kexit에서 wakeup(p->parent) 호출함)
     sleep(myp, &wait_lock);
   }
