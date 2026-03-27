@@ -126,6 +126,13 @@ found:
   p->pid = allocpid();
   p->state = USED;
   p->nice = 20; //Added for project 01
+  /* 
+  AI Assisted:  
+  Set the default nice value to 20 according to the assignment specification.  
+  I added an int nice field to struct proc, but didn't assign an initial value when creating a process,
+  which caused a malfunction due to an uninitialized nice value.  
+  To fix this, I modified the code to initialize nice to 20 at the time of process creation.  
+  */
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -731,6 +738,12 @@ setnice(int pid, int value)
     return -1;
 }
 
+/*
+AI Assisted: 
+There was an issue where returning without releasing the lock when the pid matched 
+caused a panic later. I noticed the panic while running mytest, and solved the problem 
+by modifying the code to skip lock acquisition for the current process (myproc). 
+*/
 void
 ps(int pid)
 {
@@ -748,9 +761,12 @@ ps(int pid)
   while (i < NPROC){
     struct proc *p = &proc[i];
 
-    if(p == myproc()){  // 자기 자신은 락 없이 처리
+    if(p == myproc()){
       if(pid == 0 || p->pid == pid){
-        if(printed == 0){ printf("name\t\tpid\tstate\t\tpriority\n"); printed = 1; }
+        if(printed == 0){
+          printf("name\t\tpid\tstate\t\tpriority\n");
+          printed = 1; 
+        }
         printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
         if(pid != 0) return;
       }
@@ -761,7 +777,10 @@ ps(int pid)
     acquire(&p->lock);
     if(pid == 0){
       if(p->state != UNUSED){
-        if(printed == 0){ printf("name\t\tpid\tstate\t\tpriority\n"); printed = 1; }
+        if(printed == 0){ 
+          printf("name\t\tpid\tstate\t\tpriority\n"); 
+          printed = 1; 
+        }
         printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
       }
     } else {
@@ -777,12 +796,28 @@ ps(int pid)
   }
 }
 
+/*
+AI Assisted: 
+I implemented the meminfo function in proc.c, but faced an issue where I couldn't 
+access kmem directly from there. Through AI feedback, I learned that it is more appropriate 
+to expose memory information through a function in kalloc.c, which actually manages that data. 
+Therefore, I wrote the memory_available() function in kalloc.c and modified meminfo to call it. 
+*/
 uint64
 meminfo(void)
 {
   return memory_available();
 }
 
+
+/*
+AI Assisted: 
+In the initial implementation, I used a polling method that repeatedly called yield 
+to check the child process's state. Through AI feedback, I found the following two problems: 
+1. It only checked for the ZOMBIE state and exited with return 0, so the child process's resources were not reclaimed. 
+2. It repeatedly woke up to check and yield until the child terminated, wasting CPU resources. 
+To improve this, I modified the code to explicitly free resources using freeproc and used sleep to wait without unnecessarily occupying the CPU. 
+*/
 int
 waitpid(int pid)
 {
@@ -816,7 +851,6 @@ waitpid(int pid)
       return -1;
     }
 
-    // 자식이 종료될 때까지 sleep (kexit에서 wakeup(p->parent) 호출함)
     sleep(myp, &wait_lock);
   }
 }
