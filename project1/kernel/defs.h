@@ -59,7 +59,7 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
-uint64          freemem(void);  // Added for project 01
+uint64          memory_available(void);  // Added for project 01
 
 // log.c
 void            initlog(int, struct superblock*);

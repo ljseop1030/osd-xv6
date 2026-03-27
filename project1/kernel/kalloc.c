@@ -83,7 +83,7 @@ kalloc(void)
 
 // Added for project 01
 uint64
-freemem(void)
+memory_available(void)
 {
   struct run *r;
   uint64 count = 0;

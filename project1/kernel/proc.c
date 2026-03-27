@@ -16,7 +16,7 @@ int nextpid = 1;
 struct spinlock pid_lock;
 
 //Added for project 01
-extern uint64 freemem(void);
+extern uint64 memory_available(void);
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
@@ -770,7 +770,7 @@ ps(int pid)
 uint64
 meminfo(void)
 {
-  return freemem();
+  return memory_available();
 }
 
 int
