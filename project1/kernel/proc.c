@@ -125,13 +125,13 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-  p->nice = 20; //Added for project 01
+  p->nice = 20;
   /* 
   AI Assisted:  
   Set the default nice value to 20 according to the assignment specification.  
-  I added an int nice field to struct proc, but didn't assign an initial value when creating a process,
+  We added an int nice field to struct proc, but didn't assign an initial value when creating a process,
   which caused a malfunction due to an uninitialized nice value.  
-  To fix this, I modified the code to initialize nice to 20 at the time of process creation.  
+  To fix this, we asked CLAUD why we have an error and modified the code to initialize nice to 20 at the time of process creation.  
   */
 
   // Allocate a trapframe page.
@@ -698,56 +698,76 @@ procdump(void)
   }
 }
 
+/* 
+1. getnice(int pid)
+Reads and returns the nice value of the process with the given pid.
 
+Call path: user app -> usys.S (ecall) -> sys_getnice()-> getnice()
+*/
 int
 getnice(int pid)
 {
-    int i = 0;
-    while (i < NPROC) {
-        struct proc *p = &proc[i];
-        acquire(&p->lock);
-        if (p->pid == pid) {
-            int niceValue = p->nice;
-            release(&p->lock);
-            return niceValue;
+    int i = 0; // Iterate through the proc[] array from 0
+    while (i < NPROC) {  // NPROC = 64 (maximum numbers of process slots)
+        struct proc *p = &proc[i]; 
+        acquire(&p->lock); // Acquire the spinlock (prevents race condition)
+        if (p->pid == pid) { // The pid of process matches the pid           
+            int niceValue = p->nice; // Save nice value to a local variable before releasing the lock
+            release(&p->lock);       // Release the lock before returning
+            return niceValue;        // Success: return the nice value of the process
         }
-        release(&p->lock);
+        release(&p->lock); 
         i = i + 1;
-    }
-    return -1;
+    } // Finished scanning the entire table without finding the pid
+    return -1; // Fail: no process with the given pid exists -> return -1
 }
 
+/* 
+2. setnice(int pid, int value)
+Changes the nice value of the process with the given pid to value.
+
+Call path: user app -> usys.S (ecall) -> sys_setnice() -> setnice() 
+*/
 int
-setnice(int pid, int value)
+setnice(int pid, int value) // Valid range for nice values is 0–39
 {
-    if (value < 0 || value > 39) {
+    if (value < 0 || value > 39) { //Fail: value out of range -> return -1
         return -1;  
     }
     int i = 0;
-    while (i < NPROC) {
+    while (i < NPROC) { // Iterate through the proc[] array to find the process with the given pid.
+
         struct proc *p = &proc[i];
-        acquire(&p->lock);
-        if (p->pid == pid) {
-            p->nice = value;
-            release(&p->lock);
-            return 0;
+        acquire(&p->lock); // Acquire the spinlock
+        if (p->pid == pid) { // The pid of process matches the pid
+            p->nice = value; // Overwrite the nice value 
+            release(&p->lock); // Release the lock
+            return 0; //Success -> return 0
         }
         release(&p->lock);
         i = i + 1;
-    }
-    return -1;
+    } // No process with the given pid was found.
+    return -1; // Fail -> return -1
 }
 
 /*
+3. ps(int pid)
+Prints the status of process(name, pid, state, nice value) to the console
+If pid is 0, print all process
+Prints the process with the matching pid
+If no matching process, print nothing
+
+Call path: user app -> usys.S (ecall) -> sys_ps() -> ps()
+
 AI Assisted: 
 There was an issue where returning without releasing the lock when the pid matched 
-caused a panic later. I noticed the panic while running mytest, and solved the problem 
+caused a panic later. We noticed the panic while running mytest, and solved the problem 
 by modifying the code to skip lock acquisition for the current process (myproc). 
 */
 void
 ps(int pid)
 {
-  static char *states[] = {
+  static char *states[] = { // String table for process state names.
     [UNUSED]    "UNUSED",
     [USED]      "USED",
     [SLEEPING]  "SLEEPING",
@@ -756,101 +776,141 @@ ps(int pid)
     [ZOMBIE]    "ZOMBIE"
   };
 
-  int printed = 0;
+  int printed = 0; // Tracks whether the header line has been printed yet
   int i = 0;
   while (i < NPROC){
-    struct proc *p = &proc[i];
+    struct proc *p = &proc[i];  
+    /*
+    Case 1: current process
+    The process that called ps() — myproc() — is handled without acquiring lock
+    Reason: calling acquire() on one's own lock would result in a
+    double-acquire, which causes a panic in xv6's spinlock implementation
+    */
 
     if(p == myproc()){
       if(pid == 0 || p->pid == pid){
         if(printed == 0){
-          printf("name\t\tpid\tstate\t\tpriority\n");
-          printed = 1; 
+          printf("name\t\tpid\tstate\t\tpriority\n"); // Print the header
+          printed = 1; // Since the header is printed, change printed to 1
         }
-        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
-        if(pid != 0) return;
+        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice); // Print info of process
+        if(pid != 0) return; // Found a specific pid -> return
       }
       i++;
       continue;
     }
-
-    acquire(&p->lock);
-    if(pid == 0){
-      if(p->state != UNUSED){
+  
+    // Case 2: any other process
+    acquire(&p->lock); //Acquire the lock to ensure the process state does not change while we are reading its fields
+    if(pid == 0){ // Case 2-1: Printing all processes
+      if(p->state != UNUSED){ // Skip UNUSED slots
         if(printed == 0){ 
-          printf("name\t\tpid\tstate\t\tpriority\n"); 
+          printf("name\t\tpid\tstate\t\tpriority\n"); // Print header
           printed = 1; 
         }
-        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
+        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice); // Print info of process
       }
-    } else {
+    } else { // Case 2-2: Printing single process
       if(p->pid == pid){
-        printf("name\t\tpid\tstate\t\tpriority\n");
-        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice);
-        release(&p->lock);
+        printf("name\t\tpid\tstate\t\tpriority\n"); // Print header
+        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice); // Print info of process
+        release(&p->lock); // Release lock
         return;
       }
     }
-    release(&p->lock);
+    release(&p->lock); // Release lock
     i++;
-  }
+  } // Case 3: If pid is not 0 and no matching process was found, nothing is printed
 }
 
 /*
+ 4. meminfo()
+Returns the amount of free physical memory in bytes.
+Instead of accessing kmem directly, this function delegates to
+memory_available() defined in kalloc.c.
+
+Call path: user app -> usys.S (ecall) -> sys_meminfo() -> meminfo()
+-> memory_available() [kalloc.c]
+
 AI Assisted: 
-I implemented the meminfo function in proc.c, but faced an issue where I couldn't 
-access kmem directly from there. Through AI feedback, I learned that it is more appropriate 
+We implemented the meminfo function in proc.c, but faced an issue that we couldn't 
+access kmem directly from there. Through AI feedback, we learned that it is more appropriate 
 to expose memory information through a function in kalloc.c, which actually manages that data. 
-Therefore, I wrote the memory_available() function in kalloc.c and modified meminfo to call it. 
+Therefore, we wrote the memory_available() function in kalloc.c and modified meminfo to call it. 
 */
 uint64
 meminfo(void)
 {
-  return memory_available();
+  return memory_available(); // Simply forward the result from memory_available()
 }
 
 
 /*
+5. waitpid(int pid)
+Blocks the calling process until the child process with the given pid terminates
+Returns 0 on success (target process has exited)
+Returns -1 on failure 
+(The given pid does not exist 
+or the process with that pid is not a child of the caller)
+
+Call path: user app -> usys.S (ecall) -> sys_waitpid() -> waitpid()
+
+Difference from xv6's built-in wait():
+wait()    — blocks until ANY child exits.
+waitpid() — blocks until a SPECIFIC child (by pid) exits.
+
 AI Assisted: 
-In the initial implementation, I used a polling method that repeatedly called yield 
-to check the child process's state. Through AI feedback, I found the following two problems: 
+In the initial implementation, we used a polling method that repeatedly called yield 
+to check the child process's state. Through AI feedback, we found the following two problems: 
 1. It only checked for the ZOMBIE state and exited with return 0, so the child process's resources were not reclaimed. 
 2. It repeatedly woke up to check and yield until the child terminated, wasting CPU resources. 
-To improve this, I modified the code to explicitly free resources using freeproc and used sleep to wait without unnecessarily occupying the CPU. 
+To improve this, we modified the code to explicitly free resources using freeproc and used sleep to wait without unnecessarily occupying the CPU. 
 */
 int
 waitpid(int pid)
 {
-  struct proc *myp = myproc();
+  struct proc *myp = myproc(); // myproc() returns a pointer to the currently running process (the caller)
+  // Used to verify that the target process is a direct child of the caller.
 
-  acquire(&wait_lock);
+  acquire(&wait_lock); // Held here to avoid missing a wakeup from kexit().
+  // Without this lock, the child could call wakeup() before we call sleep(),
+  // -> sleep forever waiting for a signal that already passed
 
   while (1){
-    int found = 0;
+    int found = 0; // 0: a child with the given pid not found, 1: found
     int i = 0;
-    while (i < NPROC){
+    while (i < NPROC){ // Scan the entire process table to find the target child
       struct proc *p = &proc[i];
       acquire(&p->lock);
-      if(p->pid == pid && p->parent == myp){
+      if(p->pid == pid && p->parent == myp){ // p->pid matches the requested pid,
+        // p->parent == myp — the process must be a direct child of the caller.
         found = 1;
-        if(p->state == ZOMBIE){
-          freeproc(p);
+        if(p->state == ZOMBIE){ // Case 2: The child has exited but its resources have not been reclaimed yet (ZOMBIE).
+          freeproc(p); // Release the child's memory, pagetable, and reset the slot to UNUSED
           release(&p->lock);
           release(&wait_lock);
-          return 0;
+          return 0; // Success — child has exited and resources are reclaimed -> return 0
         }
+
+        // Case 3: Child exists but has not exited yet
         release(&p->lock);
-        break;
+        break; // Break out and sleep below
       }
       release(&p->lock);
       i++;
     }
 
-    if(found == 0){
+    if(found == 0){ // Case 1: The given pid does not exist or belongs to another process's child
       release(&wait_lock);
       return -1;
     }
 
-    sleep(myp, &wait_lock);
+    sleep(myp, &wait_lock); // The child is still running. Rather than busy-waiting,
+    // we call sleep() to give up the CPU until the child exits.
+    // When the child calls kexit(), it calls wakeup(p->parent) to wake us up.
+    // sleep() releases wait_lock and suspends the caller,
+    // then re-acquires wait_lock before returning.
+
+    // Woke up — loop back to re-check whether the child has exited.
   }
 }

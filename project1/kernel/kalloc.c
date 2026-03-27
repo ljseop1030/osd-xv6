@@ -81,18 +81,23 @@ kalloc(void)
   return (void*)r;
 }
 
-// Added for project 01
+/*
+Helper function for meminfo() 
+Returns total amount of free memory
+Traverses kmem.freelist to count the number of free pages 
+and returns the total available physical memory in bytes (count × PGSIZE)
+*/
 uint64
 memory_available(void)
 {
   struct run *r;
   uint64 count = 0;
-  acquire(&kmem.lock);
+  acquire(&kmem.lock); // Prevent concurrent alloc/free while counting
   r = kmem.freelist;
   while(r){
-    count++;
+    count++; // Count each free page
     r = r->next;
   }
   release(&kmem.lock);
-  return count * PGSIZE;
+  return count * PGSIZE; // free pages × PGSIZE(4096) bytes = total free memory
 }
