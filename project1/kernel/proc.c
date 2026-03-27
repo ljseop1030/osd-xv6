@@ -811,7 +811,7 @@ waitpid(int pid)
       i++;
     }
 
-    if(!found){
+    if(found == 0){
       release(&wait_lock);
       return -1;
     }
