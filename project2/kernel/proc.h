@@ -92,6 +92,15 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
   int nice;  // Added in project 01
+
+  //Added for project02
+  // EEVDF fields
+  uint64 runtime;      // 실제 실행 tick 수
+  uint64 vruntime;     // 가상 런타임
+  uint64 vdeadline;    // 가상 데드라인
+  int timeslice;       // 남은 타임슬라이스 (기본값 5)
+  int is_eligible;     // eligible 여부 (1 = eligible)
+
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
 

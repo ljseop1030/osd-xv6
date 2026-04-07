@@ -10,6 +10,18 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
+// nice 0~39에 해당하는 weight 배열
+uint64 nice_to_weight[40] = {
+  88761, 71755, 56483, 46273, 36291,  // 0-4
+  29154, 23254, 18705, 14949, 11916,  // 5-9
+   9548,  7620,  6100,  4904,  3906,  // 10-14
+   3121,  2501,  1991,  1586,  1277,  // 15-19
+   1024,   820,   655,   526,   423,  // 20-24
+    335,   272,   215,   172,   137,  // 25-29
+    110,    87,    70,    56,    45,  // 30-34
+     36,    29,    23,    18,    15   // 35-39
+};
+
 struct proc *initproc;
 
 int nextpid = 1;
@@ -133,6 +145,13 @@ found:
   which caused a malfunction due to an uninitialized nice value.  
   To fix this, we asked CLAUD why we have an error and modified the code to initialize nice to 20 at the time of process creation.  
   */
+
+  // EEVDF initialization
+  p->runtime = 0;
+  p->vruntime = 0;
+  p->vdeadline = 0;
+  p->timeslice = 5;
+  p->is_eligible = 1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -308,6 +327,17 @@ kfork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
+
+  // EEVDF: 부모의 vruntime, nice 상속
+  np->vruntime = p->vruntime;
+  np->nice = p->nice;
+  // runtime, timeslice는 초기화
+  np->runtime = 0;
+  np->timeslice = 5;
+  // vdeadline 계산
+  np->vdeadline = np->vruntime + 5 * 1024 / nice_to_weight[np->nice];
+  np->is_eligible = 1;
+
   np->state = RUNNABLE;
   release(&np->lock);
 
@@ -430,6 +460,8 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+//아예 교체!
+
 void
 scheduler(void)
 {
@@ -438,38 +470,89 @@ scheduler(void)
 
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
     intr_off();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    // Step 1: RUNNABLE/RUNNING 프로세스들로 글로벌 변수 계산
+    uint64 v0 = ~0ULL;  // 최솟값 vruntime (v0)
+    uint64 sum_w = 0;   // Σwi
+    uint64 sum_vw = 0;  // Σ(vi - v0) * wi (v0 확정 후 계산)
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+    // v0 먼저 구하기
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE || p->state == RUNNING){
+        if(p->vruntime < v0)
+          v0 = p->vruntime;
       }
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+
+    if(v0 == ~0ULL) v0 = 0;
+
+    // sum_w, sum_vw 계산
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE || p->state == RUNNING){
+        sum_w += nice_to_weight[p->nice];
+        sum_vw += (p->vruntime - v0) * nice_to_weight[p->nice];
+      }
+      release(&p->lock);
+    }
+
+    // Step 2: eligibility 업데이트
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE || p->state == RUNNING){
+        // Σ(vi-v0)*wi >= (vi-v0)*Σwi 이면 eligible
+        if(sum_vw >= (p->vruntime - v0) * sum_w)
+          p->is_eligible = 1;
+        else
+          p->is_eligible = 0;
+      }
+      release(&p->lock);
+    }
+
+    // Step 3: eligible 프로세스 중 vdeadline 가장 작은 것 선택
+    struct proc *chosen = 0;
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE && p->is_eligible){
+        if(chosen == 0 || p->vdeadline < chosen->vdeadline)
+          chosen = p;
+      }
+      release(&p->lock);
+    }
+
+    // eligible 없으면 vdeadline 가장 작은 RUNNABLE 선택
+    if(chosen == 0){
+      for(p = proc; p < &proc[NPROC]; p++){
+        acquire(&p->lock);
+        if(p->state == RUNNABLE){
+          if(chosen == 0 || p->vdeadline < chosen->vdeadline)
+            chosen = p;
+        }
+        release(&p->lock);
+      }
+    }
+
+    // Step 4: 선택된 프로세스 실행
+    if(chosen != 0){
+      acquire(&chosen->lock);
+      // vdeadline 설정 (타임슬라이스 시작 시)
+      chosen->vdeadline = chosen->vruntime + 5 * 1024 / nice_to_weight[chosen->nice];
+      chosen->timeslice = 5;
+      chosen->state = RUNNING;
+      c->proc = chosen;
+      swtch(&c->context, &chosen->context);
+      c->proc = 0;
+      release(&chosen->lock);
+    } else {
       asm volatile("wfi");
     }
   }
 }
+
 
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
@@ -588,6 +671,13 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
+
+        p->state = RUNNABLE;
+        // EEVDF: wakeup 시 timeslice 리셋, vdeadline 재계산
+        p->timeslice = 5;
+        p->vdeadline = p->vruntime + 5 * 1024 / nice_to_weight[p->nice];
+        p->is_eligible = 1;
+
         p->state = RUNNABLE;
       }
       release(&p->lock);
@@ -741,6 +831,11 @@ setnice(int pid, int value) // Valid range for nice values is 0–39
         acquire(&p->lock); // Acquire the spinlock
         if (p->pid == pid) { // The pid of process matches the pid
             p->nice = value; // Overwrite the nice value 
+
+            // EEVDF: nice 변경 시 vdeadline 재계산
+            p->vdeadline = p->vruntime + 5 * 1024 / nice_to_weight[p->nice];
+            p->is_eligible = 1;
+
             release(&p->lock); // Release the lock
             return 0; //Success -> return 0
         }
@@ -790,10 +885,21 @@ ps(int pid)
     if(p == myproc()){
       if(pid == 0 || p->pid == pid){
         if(printed == 0){
-          printf("name\t\tpid\tstate\t\tpriority\n"); // Print the header
+          printf("name\t\tpid\tstate\t\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\teligible\ttick\n"); // Print the header
           printed = 1; // Since the header is printed, change printed to 1
         }
-        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice); // Print info of process
+        printf("%s\t\tpid:%d\t%s\tpriority:%d\truntime/weight:%lu\truntime:%lu\tvruntime:%lu\tvdeadline:%lu\teligible:%d\ttick:%u\n",
+          p->name,
+          p->pid,
+          states[p->state],
+          p->nice,
+          (p->runtime * 1000) / nice_to_weight[p->nice],
+          p->runtime * 1000,
+          p->vruntime * 1000,
+          p->vdeadline * 1000,
+          p->is_eligible,
+          ticks * 1000
+        ); // Print info of process
         if(pid != 0) return; // Found a specific pid -> return
       }
       i++;
@@ -805,15 +911,37 @@ ps(int pid)
     if(pid == 0){ // Case 2-1: Printing all processes
       if(p->state != UNUSED){ // Skip UNUSED slots
         if(printed == 0){ 
-          printf("name\t\tpid\tstate\t\tpriority\n"); // Print header
+          printf("name\t\tpid\tstate\t\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\teligible\ttick\n"); // Print header
           printed = 1; 
         }
-        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice); // Print info of process
+        printf("%s\t\tpid:%d\t%s\tpriority:%d\truntime/weight:%lu\truntime:%lu\tvruntime:%lu\tvdeadline:%lu\teligible:%d\ttick:%u\n",
+          p->name,
+          p->pid,
+          states[p->state],
+          p->nice,
+          (p->runtime * 1000) / nice_to_weight[p->nice],
+          p->runtime * 1000,
+          p->vruntime * 1000,
+          p->vdeadline * 1000,
+          p->is_eligible,
+          ticks * 1000
+        );// Print info of process
       }
     } else { // Case 2-2: Printing single process
       if(p->pid == pid){
-        printf("name\t\tpid\tstate\t\tpriority\n"); // Print header
-        printf("%s\t\t%d\t%s\t\t%d\n", p->name, p->pid, states[p->state], p->nice); // Print info of process
+        printf("name\t\tpid\tstate\t\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\teligible\ttick\n"); // Print header
+        printf("%s\t\tpid:%d\t%s\tpriority:%d\truntime/weight:%lu\truntime:%lu\tvruntime:%lu\tvdeadline:%lu\teligible:%d\ttick:%u\n",
+          p->name,
+          p->pid,
+          states[p->state],
+          p->nice,
+          (p->runtime * 1000) / nice_to_weight[p->nice],
+          p->runtime * 1000,
+          p->vruntime * 1000,
+          p->vdeadline * 1000,
+          p->is_eligible,
+          ticks * 1000
+        );
         release(&p->lock); // Release lock
         return;
       }

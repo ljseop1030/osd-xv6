@@ -161,6 +161,8 @@ kerneltrap()
   w_sstatus(sstatus);
 }
 
+extern uint64 nice_to_weight[40];
+
 void
 clockintr()
 {
@@ -171,10 +173,21 @@ clockintr()
     release(&tickslock);
   }
 
+  // EEVDF: 현재 실행중인 프로세스의 파라미터 업데이트
+  struct proc *p = myproc();
+  if(p != 0 && p->state == RUNNING){
+    acquire(&p->lock);
+    p->runtime += 1;
+    // vruntime += 1 * 1024 / weight
+    p->vruntime += 1024 / nice_to_weight[p->nice];
+    p->timeslice -= 1;
+    release(&p->lock);
+  }
+
   // ask for the next timer interrupt. this also clears
   // the interrupt request. 1000000 is about a tenth
   // of a second.
-  w_stimecmp(r_time() + 1000000);
+  w_stimecmp(r_time() + 100000); // Project2: change 타이머주기
 }
 
 // check if it's an external interrupt or software interrupt,
