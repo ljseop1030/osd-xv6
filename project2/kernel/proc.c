@@ -10,7 +10,6 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
-// nice 0~39에 해당하는 weight 배열
 uint64 nice_to_weight[40] = {
   88761, 71755, 56483, 46273, 36291,  // 0-4
   29154, 23254, 18705, 14949, 11916,  // 5-9
@@ -282,6 +281,7 @@ growproc(int n)
   return 0;
 }
 
+
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
 int
@@ -328,13 +328,13 @@ kfork(void)
 
   acquire(&np->lock);
 
-  // EEVDF: 부모의 vruntime, nice 상속
+  // EEVDF: inherit vruntime, nice
   np->vruntime = p->vruntime;
   np->nice = p->nice;
-  // runtime, timeslice는 초기화
+  // clear runtime, timeslice
   np->runtime = 0;
   np->timeslice = 5;
-  // vdeadline 계산
+  // calculate vdeadline 
   np->vdeadline = np->vruntime + 5 * 1024 / nice_to_weight[np->nice];
   np->is_eligible = 1;
 
@@ -460,7 +460,8 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
-//아예 교체!
+
+// replace scheduler to EEVDF
 
 void
 scheduler(void)
@@ -473,12 +474,11 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    // Step 1: RUNNABLE/RUNNING 프로세스들로 글로벌 변수 계산
-    uint64 v0 = ~0ULL;  // 최솟값 vruntime (v0)
-    uint64 sum_w = 0;   // Σwi
-    uint64 sum_vw = 0;  // Σ(vi - v0) * wi (v0 확정 후 계산)
+    uint64 v0 = ~0ULL;  // min vruntime (v0)
+    uint64 sum_w = 0;   // sum wi
+    uint64 sum_vw = 0;  // sum (vi - v0) * wi
 
-    // v0 먼저 구하기
+    // v0
     for(p = proc; p < &proc[NPROC]; p++){
       acquire(&p->lock);
       if(p->state == RUNNABLE || p->state == RUNNING){
@@ -490,7 +490,7 @@ scheduler(void)
 
     if(v0 == ~0ULL) v0 = 0;
 
-    // sum_w, sum_vw 계산
+    // sum_w, sum_vw
     for(p = proc; p < &proc[NPROC]; p++){
       acquire(&p->lock);
       if(p->state == RUNNABLE || p->state == RUNNING){
@@ -500,11 +500,10 @@ scheduler(void)
       release(&p->lock);
     }
 
-    // Step 2: eligibility 업데이트
+    // eligibility update
     for(p = proc; p < &proc[NPROC]; p++){
       acquire(&p->lock);
       if(p->state == RUNNABLE || p->state == RUNNING){
-        // Σ(vi-v0)*wi >= (vi-v0)*Σwi 이면 eligible
         if(sum_vw >= (p->vruntime - v0) * sum_w)
           p->is_eligible = 1;
         else
@@ -513,7 +512,7 @@ scheduler(void)
       release(&p->lock);
     }
 
-    // Step 3: eligible 프로세스 중 vdeadline 가장 작은 것 선택
+    // min vdeadline among eligible
     struct proc *chosen = 0;
     for(p = proc; p < &proc[NPROC]; p++){
       acquire(&p->lock);
@@ -524,7 +523,7 @@ scheduler(void)
       release(&p->lock);
     }
 
-    // eligible 없으면 vdeadline 가장 작은 RUNNABLE 선택
+    // no eligible; RUNNABLE with min vdeadline
     if(chosen == 0){
       for(p = proc; p < &proc[NPROC]; p++){
         acquire(&p->lock);
@@ -536,10 +535,10 @@ scheduler(void)
       }
     }
 
-    // Step 4: 선택된 프로세스 실행
+    // operation
     if(chosen != 0){
       acquire(&chosen->lock);
-      // vdeadline 설정 (타임슬라이스 시작 시)
+      // set vdeadline
       chosen->vdeadline = chosen->vruntime + 5 * 1024 / nice_to_weight[chosen->nice];
       chosen->timeslice = 5;
       chosen->state = RUNNING;
