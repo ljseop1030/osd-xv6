@@ -10,6 +10,13 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
+/*
+  AI assisted (project2)
+  At first we defined nice_to_weight as static, and there was a link error when trap.c tried to access nice_to_weight through extern.
+  With the help of AI, we learned that static is causing this error as it cannot be referenced externally,
+  and resolved the issue by removing the static in definition.
+*/
+
 uint64 nice_to_weight[40] = {
   88761, 71755, 56483, 46273, 36291,  // 0-4
   29154, 23254, 18705, 14949, 11916,  // 5-9
@@ -879,6 +886,13 @@ ps(int pid)
     The process that called ps() — myproc() — is handled without acquiring lock
     Reason: calling acquire() on one's own lock would result in a
     double-acquire, which causes a panic in xv6's spinlock implementation
+    */
+
+    /* 
+      AI assisted (project#2)
+      There were compile warnings and incorrect runtime output because we used %llu to print uint64 values.
+      Through AI, we learned that %llu is unsupported by xv6's printf.
+      We resolved it by switching to %lu for uint64 values and %u for uint32-range values such as ticks.
     */
 
     if(p == myproc()){
