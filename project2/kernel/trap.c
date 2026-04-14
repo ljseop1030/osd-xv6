@@ -173,7 +173,8 @@ clockintr()
     release(&tickslock);
   }
 
-  // EEVDF: 현재 실행중인 프로세스의 파라미터 업데이트
+
+  // EEVDF: Update present proccess
   struct proc *p = myproc();
   if(p != 0 && p->state == RUNNING){
     acquire(&p->lock);

@@ -145,7 +145,7 @@ found:
   p->state = USED;
   p->nice = 20;
   /* 
-  AI Assisted:  
+  AI Assisted: project1 
   Set the default nice value to 20 according to the assignment specification.  
   We added an int nice field to struct proc, but didn't assign an initial value when creating a process,
   which caused a malfunction due to an uninitialized nice value.  
@@ -471,7 +471,7 @@ kwait(uint64 addr)
 // replace scheduler to EEVDF
 
 void
-scheduler(void)
+scheduler(void) // replaced (EEVDF)
 {
   struct proc *p;
   struct cpu *c = mycpu();
@@ -899,7 +899,7 @@ ps(int pid)
       if(pid == 0 || p->pid == pid){
         if(printed == 0){
           printf("name\t\tpid\tstate\t\tpriority\truntime/weight\truntime\tvruntime\tvdeadline\teligible\ttick\n"); // Print the header
-          printed = 1; // Since the header is printed, change printed to 1
+          printed = 1; // Header is printed; change printed to 1
         }
         printf("%s\t\tpid:%d\t%s\tpriority:%d\truntime/weight:%lu\truntime:%lu\tvruntime:%lu\tvdeadline:%lu\teligible:%d\ttick:%u\n",
           p->name,
@@ -938,7 +938,7 @@ ps(int pid)
           p->vdeadline * 1000,
           p->is_eligible,
           ticks * 1000
-        );// Print info of process
+        ); // Print info of process
       }
     } else { // Case 2-2: Printing single process
       if(p->pid == pid){
@@ -973,7 +973,7 @@ memory_available() defined in kalloc.c.
 Call path: user app -> usys.S (ecall) -> sys_meminfo() -> meminfo()
 -> memory_available() [kalloc.c]
 
-AI Assisted: 
+AI Assisted: project1
 We implemented the meminfo function in proc.c, but faced an issue that we couldn't 
 access kmem directly from there. Through AI feedback, we learned that it is more appropriate 
 to expose memory information through a function in kalloc.c, which actually manages that data. 
@@ -1000,7 +1000,7 @@ Difference from xv6's built-in wait():
 wait()    — blocks until ANY child exits.
 waitpid() — blocks until a SPECIFIC child (by pid) exits.
 
-AI Assisted: 
+AI Assisted: project1
 In the initial implementation, we used a polling method that repeatedly called yield 
 to check the child process's state. Through AI feedback, we found the following two problems: 
 1. It only checked for the ZOMBIE state and exited with return 0, so the child process's resources were not reclaimed. 
