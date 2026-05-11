@@ -5,8 +5,10 @@
 #include "riscv.h"
 #include "defs.h"
 #include "spinlock.h"
-#include "proc.h"
+#include "sleeplock.h"
 #include "fs.h"
+#include "file.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -449,11 +451,22 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
 // out of physical memory, and physical address if successful.
+//
+// Modified for project 03: also dispatches to mmap_fault() when the
+// faulting address lies inside the mmap region (va >= MMAPBASE).
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
   uint64 mem;
   struct proc *p = myproc();
+
+  // Project 03: mmap region fault.
+  // The caller passes `read` = 1 for r_scause()==13 (load fault),
+  // 0 for r_scause()==15 (store/AMO fault). mmap_fault wants the
+  // opposite convention: 1 means "this was a write".
+  if (va >= MMAPBASE) {
+    return mmap_fault(pagetable, va, !read);
+  }
 
   if (va >= p->sz)
     return 0;
@@ -482,5 +495,321 @@ ismapped(pagetable_t pagetable, uint64 va)
   if (*pte & PTE_V){
     return 1;
   }
+  return 0;
+}
+
+// =====================================================================
+// Project 03 (Virtual Memory / mmap) implementation
+// =====================================================================
+//
+// We keep one system-wide array of mmap_area records. A slot is "in
+// use" iff p != 0; setting p reserves the slot, clearing p frees it.
+//
+// We use NO locking. This is safe under these assumptions, which hold
+// for the test harness (pa3_test) and the xv6 configuration in the
+// provided Makefile:
+//   - xv6 is built with -smp 1 (single CPU), so two user processes
+//     never run system calls simultaneously.
+//   - Every mmap_area is identified by its owner (m->p), so a
+//     concurrent operation in another process can't touch our slots.
+//   - The fault path calls into the file system (ilock/readi), which
+//     can sleep; while we sleep, another process may run. But that
+//     other process can only touch its own slots (m->p == its proc),
+//     so we still don't race with ourselves.
+
+struct mmap_area mmap_areas[MAXMMAP];
+
+// Convert mmap prot bits to RISC-V PTE flag bits. PTE_U is always
+// set because mmap regions are user-accessible.
+static int
+prot_to_pteflags(int prot)
+{
+  int flags = PTE_U;
+  if (prot & PROT_READ)
+    flags |= PTE_R;
+  if (prot & PROT_WRITE)
+    flags |= PTE_W;
+  return flags;
+}
+
+// Allocate one physical page, zero it, optionally load file data, and
+// install the PTE. Returns the physical address on success, 0 on
+// failure (caller treats this as an invalid access).
+static uint64
+mmap_install_page(pagetable_t pgtbl,
+                  uint64 va,
+                  int prot,
+                  int flags,
+                  struct file *f,
+                  int file_off)
+{
+  char *mem = kalloc();
+  if (mem == 0)
+    return 0;
+  memset(mem, 0, PGSIZE);
+
+  if (!(flags & MAP_ANONYMOUS)) {
+    if (f == 0 || f->type != FD_INODE) {
+      kfree(mem);
+      return 0;
+    }
+    ilock(f->ip);
+    // readi may read fewer than PGSIZE bytes if the file ends early;
+    // the remainder of the page stays zero, which is the desired
+    // behavior for partially-mapped file pages.
+    readi(f->ip, 0, (uint64)mem, (uint)file_off, PGSIZE);
+    iunlock(f->ip);
+  }
+
+  int pteflags = prot_to_pteflags(prot);
+  if (mappages(pgtbl, va, PGSIZE, (uint64)mem, pteflags) != 0) {
+    kfree(mem);
+    return 0;
+  }
+  return (uint64)mem;
+}
+
+// Page-fault handler for the mmap region. Called from vmfault() when
+// va >= MMAPBASE. Implements slides 23-25:
+//   - find the mmap_area containing va
+//   - reject invalid access
+//   - allocate one page, load data, install PTE
+// Returns the physical address on success, 0 on failure.
+uint64
+mmap_fault(pagetable_t pagetable, uint64 va, int write)
+{
+  struct proc *p = myproc();
+  uint64 page_va = PGROUNDDOWN(va);
+
+  // Find the matching mmap_area.
+  struct mmap_area *m = 0;
+  for (int i = 0; i < MAXMMAP; i++) {
+    struct mmap_area *cand = &mmap_areas[i];
+    if (cand->p != p)
+      continue;
+    if (page_va >= cand->addr && page_va < cand->addr + cand->length) {
+      m = cand;
+      break;
+    }
+  }
+  if (m == 0)
+    return 0;
+
+  // Permission check: writing to a read-only region is invalid.
+  if (write && !(m->prot & PROT_WRITE))
+    return 0;
+
+  // Already mapped? This shouldn't happen, but guard anyway.
+  if (ismapped(pagetable, page_va))
+    return 0;
+
+  int file_off = m->offset + (int)(page_va - m->addr);
+  return mmap_install_page(pagetable, page_va,
+                           m->prot, m->flags, m->f, file_off);
+}
+
+// The mmap() system call. See slides 10-13.
+// On success: returns the start virtual address of the mapping.
+// On failure: returns 0.
+uint64
+mmap(uint64 addr, int length, int prot, int flags, int fd, int offset)
+{
+  struct proc *p = myproc();
+
+  // Argument validation (slide 13).
+  if ((addr % PGSIZE) != 0)
+    return 0;
+  if (length <= 0 || (length % PGSIZE) != 0)
+    return 0;
+  if (prot != PROT_READ && prot != (PROT_READ | PROT_WRITE))
+    return 0;
+
+  uint64 start = MMAPBASE + addr;
+  if (start + (uint64)length > TRAPFRAME)
+    return 0;
+
+  // File / fd handling.
+  struct file *f = 0;
+  if (flags & MAP_ANONYMOUS) {
+    if (fd != -1)
+      return 0;
+  } else {
+    if (fd < 0 || fd >= NOFILE)
+      return 0;
+    f = p->ofile[fd];
+    if (f == 0)
+      return 0;
+    if ((prot & PROT_READ) && !f->readable)
+      return 0;
+    if ((prot & PROT_WRITE) && !f->writable)
+      return 0;
+    if (f->type != FD_INODE)
+      return 0;
+  }
+
+  // Reject overlap with this process's existing mappings.
+  uint64 end = start + (uint64)length;
+  for (int i = 0; i < MAXMMAP; i++) {
+    struct mmap_area *m = &mmap_areas[i];
+    if (m->p != p)
+      continue;
+    uint64 m_end = m->addr + m->length;
+    if (start < m_end && m->addr < end)
+      return 0;
+  }
+
+  // Find a free slot.
+  struct mmap_area *slot = 0;
+  for (int i = 0; i < MAXMMAP; i++) {
+    if (mmap_areas[i].p == 0) {
+      slot = &mmap_areas[i];
+      break;
+    }
+  }
+  if (slot == 0)
+    return 0;
+
+  // Fill in the slot.
+  slot->addr = start;
+  slot->length = length;
+  slot->offset = offset;
+  slot->prot = prot;
+  slot->flags = flags;
+  slot->f = f;
+  slot->p = p;
+  if (f)
+    filedup(f);
+
+  // MAP_POPULATE: install every page now (slide 12).
+  if (flags & MAP_POPULATE) {
+    int npages = length / PGSIZE;
+    for (int i = 0; i < npages; i++) {
+      uint64 page_va = start + (uint64)i * PGSIZE;
+      int file_off = offset + (int)(page_va - start);
+      if (mmap_install_page(p->pagetable, page_va,
+                            prot, flags, f, file_off) == 0) {
+        // Out of memory partway through; roll back.
+        for (int j = 0; j < i; j++) {
+          uint64 va_j = start + (uint64)j * PGSIZE;
+          uvmunmap(p->pagetable, va_j, 1, 1);
+        }
+        if (f)
+          fileclose(f);
+        slot->p = 0;
+        slot->f = 0;
+        return 0;
+      }
+    }
+  }
+  // Without MAP_POPULATE the slot just sits there until fault or munmap.
+
+  return start;
+}
+
+// The munmap() system call. See slide 26.
+// Returns 1 on success, -1 on failure.
+int
+munmap(uint64 addr)
+{
+  struct proc *p = myproc();
+
+  if ((addr % PGSIZE) != 0)
+    return -1;
+
+  // Find the slot that starts at addr.
+  struct mmap_area *m = 0;
+  for (int i = 0; i < MAXMMAP; i++) {
+    if (mmap_areas[i].p == p && mmap_areas[i].addr == addr) {
+      m = &mmap_areas[i];
+      break;
+    }
+  }
+  if (m == 0)
+    return -1;
+
+  // For each page in the region: if it was actually faulted in, free
+  // it; if it was lazy and never accessed, just skip it.
+  int npages = m->length / PGSIZE;
+  for (int i = 0; i < npages; i++) {
+    uint64 va = m->addr + (uint64)i * PGSIZE;
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if (pte == 0)
+      continue;
+    if ((*pte & PTE_V) == 0)
+      continue;
+    uvmunmap(p->pagetable, va, 1, 1);  // do_free = 1 -> kfree the page
+  }
+
+  // Drop the file reference and free the slot.
+  if (m->f)
+    fileclose(m->f);
+  m->f = 0;
+  m->p = 0;
+
+  return 1;
+}
+
+// The freemem() system call. See slide 27.
+// Returns the number of free physical memory PAGES (not bytes).
+int
+freemem(void)
+{
+  return (int)(memory_available() / PGSIZE);
+}
+
+// Copy parent's mmap regions into the child after kfork()'s uvmcopy().
+// uvmcopy only handles [0, p->sz), so the mmap region is copied here.
+// See slides 7, 38, 45.
+// Returns 0 on success, -1 on failure (caller should free the child).
+int
+mmap_copy(struct proc *parent, struct proc *child)
+{
+  for (int i = 0; i < MAXMMAP; i++) {
+    struct mmap_area *pm = &mmap_areas[i];
+    if (pm->p != parent)
+      continue;
+
+    // Find a free slot for the child.
+    struct mmap_area *cm = 0;
+    for (int j = 0; j < MAXMMAP; j++) {
+      if (mmap_areas[j].p == 0) {
+        cm = &mmap_areas[j];
+        break;
+      }
+    }
+    if (cm == 0)
+      return -1;
+
+    // Copy metadata. Owner is now the child. The child shares the
+    // same file as the parent (we bump the ref count).
+    *cm = *pm;
+    cm->p = child;
+    if (cm->f)
+      filedup(cm->f);
+
+    // For each page in the parent's mapping that's actually allocated,
+    // give the child its own private copy. Pages not yet faulted in
+    // are left lazy in the child as well.
+    int npages = pm->length / PGSIZE;
+    for (int k = 0; k < npages; k++) {
+      uint64 va = pm->addr + (uint64)k * PGSIZE;
+      pte_t *ppte = walk(parent->pagetable, va, 0);
+      if (ppte == 0 || (*ppte & PTE_V) == 0)
+        continue;  // parent never faulted this page in
+      uint64 ppa = PTE2PA(*ppte);
+      uint pteflags = PTE_FLAGS(*ppte);
+
+      char *cmem = kalloc();
+      if (cmem == 0)
+        return -1;
+      memmove(cmem, (char *)ppa, PGSIZE);
+      if (mappages(child->pagetable, va, PGSIZE,
+                   (uint64)cmem, pteflags) != 0) {
+        kfree(cmem);
+        return -1;
+      }
+    }
+  }
+
   return 0;
 }

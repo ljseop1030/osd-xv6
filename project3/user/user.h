@@ -31,6 +31,11 @@ void ps(int);
 uint64 meminfo(void);
 int waitpid(int);
 
+// system calls added in project 3 (Virtual Memory / mmap)
+uint64 mmap(uint64 addr, int length, int prot, int flags, int fd, int offset);
+int munmap(uint64 addr);
+int freemem(void);
+
 
 
 

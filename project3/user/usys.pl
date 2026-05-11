@@ -48,3 +48,7 @@ entry("setnice");
 entry("ps");
 entry("meminfo");
 entry("waitpid");
+# system calls added in project 3 (Virtual Memory / mmap)
+entry("mmap");
+entry("munmap");
+entry("freemem");

@@ -176,6 +176,12 @@ int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
+// Added for project 03 (Virtual Memory / mmap)
+uint64          mmap(uint64, int, int, int, int, int);
+int             munmap(uint64);
+int             freemem(void);
+int             mmap_copy(struct proc *parent, struct proc *child);
+uint64          mmap_fault(pagetable_t, uint64, int);
 
 // plic.c
 void            plicinit(void);

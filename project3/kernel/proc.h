@@ -114,3 +114,16 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+// Added for project 03 (Virtual Memory / mmap) — see slide 20.
+// One entry per active mmap() region. Kept in a global array of
+// size MAXMMAP (in vm.c). A slot is "in use" iff p != 0.
+struct mmap_area {
+  struct file *f;     // file pointer for file-backed mappings
+  uint64 addr;        // start virtual address of the mapping
+  int length;         // mapping size in bytes (multiple of PGSIZE)
+  int offset;         // file offset (for file-backed mappings)
+  int prot;           // protection bits (PROT_READ | PROT_WRITE)
+  int flags;          // mapping flags (MAP_ANONYMOUS | MAP_POPULATE)
+  struct proc *p;     // owner process; 0 means slot is free
+};

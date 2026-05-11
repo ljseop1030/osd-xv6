@@ -311,6 +311,16 @@ kfork(void)
   }
   np->sz = p->sz;
 
+  // Added for project 03 (Virtual Memory / mmap) — slides 7, 38, 45.
+  // Duplicate parent's mmap regions into the child. uvmcopy above
+  // only walks [0, p->sz), so the mmap region (>= MMAPBASE) is
+  // copied separately here.
+  if (mmap_copy(p, np) < 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
