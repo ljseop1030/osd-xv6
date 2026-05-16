@@ -596,6 +596,9 @@ mmap_fault(pagetable_t pagetable, uint64 va, int write)
     return 0;
 
   // Permission check: writing to a read-only region is invalid.
+  /* AI generated: First put this check inside mmap_install_page, but Claude
+   * pointed out it only makes sense at fault time — the eager path has no
+   * "write" yet. Moved up to the dispatcher. */
   if (write && !(m->prot & PROT_WRITE))
     return 0;
 
@@ -611,6 +614,9 @@ mmap_fault(pagetable_t pagetable, uint64 va, int write)
 // The mmap() system call. See slides 10-13.
 // On success: returns the start virtual address of the mapping.
 // On failure: returns 0.
+/* AI generated: Claude suggested moving filedup() to after the slot is
+ * filled in, so only the MAP_POPULATE rollback needs to undo it. Also
+ * fixed the overlap check from `<=` to `<` (adjacent regions are OK). */
 uint64
 mmap(uint64 addr, int length, int prot, int flags, int fd, int offset)
 {
@@ -681,6 +687,9 @@ mmap(uint64 addr, int length, int prot, int flags, int fd, int offset)
     filedup(f);
 
   // MAP_POPULATE: install every page now (slide 12).
+  /* AI generated: First draft just returned 0 on kalloc failure, leaking
+   * already-installed pages. Claude flagged the partial-failure case; added
+   * the j-loop rollback plus fileclose + slot release. */
   if (flags & MAP_POPULATE) {
     int npages = length / PGSIZE;
     for (int i = 0; i < npages; i++) {
@@ -729,6 +738,9 @@ munmap(uint64 addr)
 
   // For each page in the region: if it was actually faulted in, free
   // it; if it was lazy and never accessed, just skip it.
+  /* AI generated: Initially called uvmunmap once for the whole region, but
+   * Claude pointed out lazy pages would make it panic. Per-page PTE_V check
+   * skips untouched pages. */
   int npages = m->length / PGSIZE;
   for (int i = 0; i < npages; i++) {
     uint64 va = m->addr + (uint64)i * PGSIZE;
@@ -782,6 +794,9 @@ mmap_copy(struct proc *parent, struct proc *child)
 
     // Copy metadata. Owner is now the child. The child shares the
     // same file as the parent (we bump the ref count).
+  /* AI generated: First version eagerly copied every page, defeating lazy
+   * allocation across fork. Claude: skip parent's lazy pages (PTE_V == 0)
+   * and let the child fault them in on demand. */
     *cm = *pm;
     cm->p = child;
     if (cm->f)
