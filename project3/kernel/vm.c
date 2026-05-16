@@ -794,13 +794,15 @@ mmap_copy(struct proc *parent, struct proc *child)
 
     // Copy metadata. Owner is now the child. The child shares the
     // same file as the parent (we bump the ref count).
-  /* AI generated: First version eagerly copied every page, defeating lazy
-   * allocation across fork. Claude: skip parent's lazy pages (PTE_V == 0)
-   * and let the child fault them in on demand. */
     *cm = *pm;
     cm->p = child;
     if (cm->f)
       filedup(cm->f);
+
+
+  /* AI generated: First version eagerly copied every page, defeating lazy
+   * allocation across fork. Claude: skip parent's lazy pages (PTE_V == 0)
+   * and let the child fault them in on demand. */
 
     // For each page in the parent's mapping that's actually allocated,
     // give the child its own private copy. Pages not yet faulted in
