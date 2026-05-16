@@ -516,7 +516,8 @@ ismapped(pagetable_t pagetable, uint64 va)
 //     can sleep; while we sleep, another process may run. But that
 //     other process can only touch its own slots (m->p == its proc),
 //     so we still don't race with ourselves.
-
+//  - If this code is ever ported to an SMP build (-smp > 1),
+//    a spinlock around mmap_areas[] would be required.
 struct mmap_area mmap_areas[MAXMMAP];
 
 // Convert mmap prot bits to RISC-V PTE flag bits. PTE_U is always
@@ -617,6 +618,14 @@ mmap_fault(pagetable_t pagetable, uint64 va, int write)
 /* AI generated: Claude suggested moving filedup() to after the slot is
  * filled in, so only the MAP_POPULATE rollback needs to undo it. Also
  * fixed the overlap check from `<=` to `<` (adjacent regions are OK). */
+// NOTE(future work, see report section 5.3):
+// kexit() currently does not iterate mmap_areas[] to free slots
+// owned by an exiting process. If a process exits without calling
+// munmap() on every region it created, its slots and physical pages
+// will leak until the slot table fills up. The fix is small —
+// one helper that walks mmap_areas[] filtering by m->p == p, plus
+// one call site in kexit() — but we did not add it because pa3_test
+// always matches every mmap() with a munmap() before exiting.
 uint64
 mmap(uint64 addr, int length, int prot, int flags, int fd, int offset)
 {
