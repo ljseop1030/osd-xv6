@@ -111,6 +111,8 @@ extern uint64 sys_waitpid(void);
 extern uint64 sys_mmap(void);
 extern uint64 sys_munmap(void);
 extern uint64 sys_freemem(void);
+// Added for project 04 (Page Replacement)
+extern uint64 sys_swapstat(void);
 
 
 // An array mapping syscall numbers from syscall.h

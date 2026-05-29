@@ -360,13 +360,16 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // user can access
+#define PTE_S (1L << 8)   // swapped-out marker (RSW bit) -- proj4 README
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
-
 #define PTE2PA(pte) (((pte) >> 10) << 12)
-
 #define PTE_FLAGS(pte) ((pte) & 0x3FF)
+
+// proj4 README
+#define SLOT2PTE(slot) PA2PTE((uint64)(slot) << 12)
+#define PTE2SLOT(pte)  ((uint)(PTE2PA(pte) >> 12))
 
 // extract the three 9-bit page table indices from a virtual address.
 #define PXMASK          0x1FF // 9 bits

@@ -30,3 +30,5 @@
 #define SYS_mmap    27
 #define SYS_munmap  28
 #define SYS_freemem 29
+// added for project 04 (page replacement)
+#define SYS_swapstat 30 // 22 is already used. we used the next available number

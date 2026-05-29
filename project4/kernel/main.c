@@ -26,6 +26,8 @@ main()
     plicinithart();  // ask PLIC for device interrupts
     binit();         // buffer cache
     iinit();         // inode table
+    swapinit();      // PA4: swap bitmap -- proj4 README
+    lruinit();       // PA4: LRU list -- proj4 README
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
