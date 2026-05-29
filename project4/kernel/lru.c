@@ -91,10 +91,49 @@ lru_size(void)
 //   6. Increment lru.count.
 //   7. Release lru.lock.
 //
+
+// lru_add: attach a freshly-mapped user frame to the tail of the LRU list.
 void
 lru_add(pagetable_t pt, uint64 va, uint64 pa)
 {
   // TODO: implement.
+
+  struct page *pg = pa_to_page(pa);
+
+  acquire(&lru.lock);
+
+  // If already on the list, unlink first so we can re-insert at the tail.
+  if(pg->pagetable != 0){
+    if(pg->next == pg){
+      lru.head = 0;
+    } else {
+      pg->prev->next = pg->next;
+      pg->next->prev = pg->prev;
+      if(lru.head == pg)
+        lru.head = pg->next;
+    }
+    lru.count--;
+  }
+
+  pg->pagetable = pt;
+  pg->vaddr     = va;
+
+  if(lru.head == 0){
+    // empty list: pg points to itself
+    pg->next = pg;
+    pg->prev = pg;
+    lru.head = pg;
+  } else {
+    // insert before head == tail of the circular list
+    struct page *tail = lru.head->prev;
+    tail->next     = pg;
+    pg->prev       = tail;
+    pg->next       = lru.head;
+    lru.head->prev = pg;
+  }
+
+  lru.count++;
+  release(&lru.lock);
 }
 
 //
@@ -116,10 +155,40 @@ lru_add(pagetable_t pt, uint64 va, uint64 pa)
 //   6. Decrement lru.count.
 //   7. Release lru.lock.
 //
+
+// lru_remove: detach a frame from the LRU list.
 void
 lru_remove(uint64 pa)
 {
   // TODO: implement.
+
+  struct page *pg = pa_to_page(pa);
+
+  acquire(&lru.lock);
+
+  if(pg->pagetable == 0){
+    // not on the list (e.g. already swapped out, or never tracked)
+    release(&lru.lock);
+    return;
+  }
+
+  if(pg->next == pg){
+    // only element
+    lru.head = 0;
+  } else {
+    pg->prev->next = pg->next;
+    pg->next->prev = pg->prev;
+    if(lru.head == pg)
+      lru.head = pg->next;
+  }
+
+  pg->pagetable = 0;
+  pg->vaddr     = 0;
+  pg->next      = 0;
+  pg->prev      = 0;
+
+  lru.count--;
+  release(&lru.lock);
 }
 
 //
@@ -157,9 +226,78 @@ lru_remove(uint64 pa)
 //   walk(pt, va, alloc=0)    -- page-table walk
 //   sfence_vma()             -- TLB flush
 //
+
+// lru_select_victim: clock algorithm. Walk from lru.head, give a second
+// chance to PTE_A==1 pages, pick the first PTE_A==0 page as victim.
+// Returns its pa and unlinks it; writes owner pt/va to out params.
+
 uint64
 lru_select_victim(pagetable_t *out_pt, uint64 *out_va)
 {
   // TODO: implement.
+
+  acquire(&lru.lock);
+
+  if(lru.head == 0){
+    release(&lru.lock);
+    return 0;
+  }
+
+  // Safety net: at most 2 full passes are ever needed.
+  int bound = 2 * lru.count + 1;
+
+  for(int i = 0; i < bound && lru.head != 0; i++){
+    struct page *pg = lru.head;
+    pte_t *pte = walk(pg->pagetable, pg->vaddr, 0);
+
+    // Stale node: PTE gone or no longer resident -> drop it.
+    if(pte == 0 || (*pte & PTE_V) == 0){
+      // unlink pg (it is the head)
+      if(pg->next == pg){
+        lru.head = 0;
+      } else {
+        pg->prev->next = pg->next;
+        pg->next->prev = pg->prev;
+        lru.head = pg->next;
+      }
+      pg->pagetable = 0;
+      pg->vaddr = 0;
+      pg->next = 0;
+      pg->prev = 0;
+      lru.count--;
+      continue;
+    }
+
+    if(*pte & PTE_A){
+      // recently used: clear A, rotate to tail (advance head), retry
+      *pte &= ~PTE_A;
+      sfence_vma();
+      lru.head = pg->next;   // pg is now logically at the tail
+      continue;
+    }
+
+    // PTE_A == 0 -> victim. Unlink and return.
+    uint64 pa = PTE2PA(*pte);
+    *out_pt = pg->pagetable;
+    *out_va = pg->vaddr;
+
+    if(pg->next == pg){
+      lru.head = 0;
+    } else {
+      pg->prev->next = pg->next;
+      pg->next->prev = pg->prev;
+      lru.head = pg->next;
+    }
+    pg->pagetable = 0;
+    pg->vaddr = 0;
+    pg->next = 0;
+    pg->prev = 0;
+    lru.count--;
+
+    release(&lru.lock);
+    return pa;
+  }
+
+  release(&lru.lock);
   return 0;
 }

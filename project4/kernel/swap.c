@@ -204,11 +204,49 @@ swapstat(int *nr_sectors_read, int *nr_sectors_write)
 //   lru_add(pt, va, pa)    -- re-insert a frame into the LRU (used on
 //                             failure to put the page back where it was)
 //
+
+// swap_out: evict one user page via the clock algorithm, write it to
+// the swap area, rewrite its PTE, and return the freed frame.
+
 void *
 swap_out(void)
 {
   // TODO: implement.
-  return 0;
+  
+    pagetable_t pt;
+  uint64 va;
+
+  // 1. Ask the clock algorithm for a victim (also unlinks it from LRU).
+  uint64 pa = lru_select_victim(&pt, &va);
+  if(pa == 0)
+    return 0;                       // LRU empty -> OOM
+
+  // 2. Reserve a swap slot.
+  int slot = swap_alloc_slot();
+  if(slot < 0){
+    // swap full: put the victim back and fail.
+    lru_add(pt, va, pa);
+    return 0;
+  }
+
+  // 3. Write victim contents to disk.
+  swapwrite(pa, slot);
+
+  // 4. Rewrite the owning PTE: PPN <- slot, clear V, set S, keep perms.
+  pte_t *pte = walk(pt, va, 0);
+  if(pte == 0){
+    // Shouldn't happen, but stay safe: release the slot and fail.
+    swap_free_slot(slot);
+    return 0;
+  }
+  uint64 flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_V;                  // no longer resident
+  flags |=  PTE_S;                  // mark swapped out
+  *pte = SLOT2PTE(slot) | flags;
+  sfence_vma();
+
+  // 5. Return the freed frame to the caller (kalloc).
+  return (void *)pa;
 }
 
 //
@@ -251,9 +289,46 @@ swap_out(void)
 //
 //   Return 0 on success.
 //
+
+// swap_in: bring a swapped-out page back into memory. Called from the
+// page-fault handler when a PTE has PTE_V==0 and PTE_S==1.
+
 int
 swap_in(pagetable_t pt, uint64 va)
 {
   // TODO: implement.
+
+  va = PGROUNDDOWN(va);
+
+  // 2. Find PTE; confirm it is really a swapped-out entry.
+  pte_t *pte = walk(pt, va, 0);
+  if(pte == 0)
+    return -1;
+  if((*pte & PTE_V) != 0 || (*pte & PTE_S) == 0)
+    return -1;                      // not a swap-in case -> real fault
+
+  // 3. Slot index lives in the PPN field.
+  uint slot = PTE2SLOT(*pte);
+
+  // 4. Allocate a frame (may recursively swap_out; can still fail at OOM).
+  char *mem = kalloc();
+  if(mem == 0)
+    return -1;
+
+  // 5. Read contents back, then free the slot.
+  swapread((uint64)mem, slot);
+  swap_free_slot(slot);
+
+  // 6. Rewrite PTE: PPN <- new frame, set V, clear S, keep perms.
+  uint64 flags = PTE_FLAGS(*pte);
+  flags |=  PTE_V;
+  flags &= ~PTE_S;
+  *pte = PA2PTE((uint64)mem) | flags;
+
+  // 7. Re-attach to LRU.
+  lru_add(pt, va, (uint64)mem);
+
+  // 8. Flush stale TLB entry; faulting instruction will retry.
+  sfence_vma();
   return -1;
 }
