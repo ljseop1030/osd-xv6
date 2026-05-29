@@ -62,9 +62,15 @@ kfree(void *pa)
   release(&kmem.lock);
 }
 
+
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
+
+// proj4: when the free-list is empty, evict a user page via swap_out()
+// and use the freed frame. swap_out() must run WITHOUT kmem.lock held,
+// since it performs disk I/O (which can sleep) and calls back into the
+// allocator paths. AI was used (Claude) for the swap-out integration.
 void *
 kalloc(void)
 {
@@ -75,6 +81,15 @@ kalloc(void)
   if(r)
     kmem.freelist = r->next;
   release(&kmem.lock);
+
+  if(r == 0){
+    // Free-list empty: try to reclaim a frame by swapping a victim out.
+    r = (struct run *)swap_out();
+    if(r == 0)
+      return 0;                      // both RAM and swap exhausted -> OOM
+    // swap_out returns a frame that is no longer mapped anywhere; it is
+    // ours to hand out directly (do NOT push it back on the freelist).
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

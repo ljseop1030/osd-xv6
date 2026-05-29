@@ -68,15 +68,23 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
-  } else {
-    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
-    setkilled(p);
+  } else if(r_scause() == 15 || r_scause() == 13){
+    uint64 va = r_stval();
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if(pte != 0 && (*pte & PTE_V) == 0 && (*pte & PTE_S)){
+      if(swap_in(p->pagetable, va) < 0){
+        printf("usertrap(): swap_in failed scause 0x%lx pid=%d\n", r_scause(), p->pid);
+        setkilled(p);
+      }
+      // success -> the faulting instruction will re-execute
+    } else if(vmfault(p->pagetable, va, (r_scause() == 13) ? 1 : 0) != 0){
+      // lazy-allocated / mmap page handled
+    } else {
+      printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+      setkilled(p);
+    }
   }
-
   if(killed(p))
     kexit(-1);
 
@@ -197,8 +205,7 @@ clockintr()
 // 1 if other device,
 // 0 if not recognized.
 int
-devintr()
-{
+devintr() {
   uint64 scause = r_scause();
 
   if(scause == 0x8000000000000009L){

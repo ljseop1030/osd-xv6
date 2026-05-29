@@ -167,6 +167,12 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+
+    // proj4: track user frames in the LRU list for clock replacement.
+    // Only user pages (PTE_U) are swappable; page-table pages and
+    // kernel pages must never be added. AI was used (Claude).
+    if(perm & PTE_U)
+      lru_add(pagetable, a, pa);
     if(a == last)
       break;
     a += PGSIZE;
@@ -202,9 +208,24 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
-      continue;   
-    if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
+
+    // PA4: a swapped-out page has PTE_V==0 but PTE_S==1. It owns a swap
+    // slot (not a frame), so free the slot and clear the PTE. There is
+    // nothing to kfree and nothing in the LRU. AI was used (Claude).
+    if((*pte & PTE_V) == 0){
+      if(*pte & PTE_S){
+        swap_free_slot(PTE2SLOT(*pte));
+        *pte = 0;
+      }
+      continue;   // not resident -> nothing else to do
+    }
+
+    // Resident page. If it's a user page it may be on the LRU list;
+    // remove it before freeing so the clock never walks a freed frame.
+    if(*pte & PTE_U)
+      lru_remove(PTE2PA(*pte));
+
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
@@ -306,8 +327,19 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       continue;   // page table entry hasn't been allocated
-    if((*pte & PTE_V) == 0)
-      continue;   // physical page hasn't been allocated
+
+    // proj4: if the parent page is swapped out, bring it back first so we
+    // can copy real contents. swap_in rewrites the PTE in place (V=1,
+    // S=0) and re-attaches it to the LRU. AI was used (Claude).
+    if((*pte & PTE_V) == 0){
+      if(*pte & PTE_S){
+        if(swap_in(old, i) < 0)
+          goto err;
+        // pte pointer is still valid; *pte now describes a resident page.
+      } else {
+        continue; // genuinely unallocated
+      }
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
