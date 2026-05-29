@@ -330,5 +330,5 @@ swap_in(pagetable_t pt, uint64 va)
 
   // 8. Flush stale TLB entry; faulting instruction will retry.
   sfence_vma();
-  return -1;
+  return 0;
 }

@@ -149,6 +149,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_mmap]    sys_mmap,
 [SYS_munmap]  sys_munmap,
 [SYS_freemem] sys_freemem,
+// Added in project 04 (Replace Pages)
+[SYS_swapstat] sys_swapstat,
 };
 
 void
