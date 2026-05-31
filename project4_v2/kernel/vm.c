@@ -367,6 +367,16 @@ uvmclear(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
+
+  // PA4: clearing PTE_U turns this into a non-user page (the exec stack
+  // guard). It was added to the LRU by mappages() when PTE_U was set, so
+  // it must be removed now -- otherwise the LRU keeps a node pointing into
+  // this page table after the process exits, freewalk() frees the table,
+  // and the next clock walk dereferences a dangling pointer (panic in
+  // walk). AI was used (Claude) to diagnose and fix this.
+  if((*pte & PTE_V) && (*pte & PTE_U))
+    lru_remove(PTE2PA(*pte));
+
   *pte &= ~PTE_U;
 }
 
