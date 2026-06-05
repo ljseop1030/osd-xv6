@@ -39,7 +39,7 @@ kexec(char *path, char **argv)
 
   // Open the executable file.
   if((ip = namei(path)) == 0){
-    printf("[DBG] exec FAIL @namei(%s): swap_inuse=%d lru_size=%d\n", path, swap_inuse(), lru_size());
+    printf("[DBG] exec FAIL @namei(%s): swap_inuse=%d lru_size=%d fs_in_swaparea=%d\n", path, swap_inuse(), lru_size(), swap_fs_overlap());
     end_op();
     return -1;
   }

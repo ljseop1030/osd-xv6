@@ -199,6 +199,7 @@ void   swap_free_slot(uint slot);
 void  *swap_out(void);
 int    swap_in(pagetable_t pt, uint64 va);
 int    swap_inuse(void);   // DBG
+int    swap_fs_overlap(void);   // DBG
 
 // lru.c - proj4 README
 void   lruinit(void);

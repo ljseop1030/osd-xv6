@@ -54,6 +54,28 @@ struct {
 // DBG: report slots in use (callable from anywhere)
 int swap_inuse(void){ int n; acquire(&swapmap.lock); n = swapmap.inuse; release(&swapmap.lock); return n; }
 
+// DBG: read the on-disk free bitmap and count how many blocks INSIDE the swap
+// area [SWAPBASE, SWAPBASE+SWAPMAX) the file system has marked as used. If the
+// fs ever allocates a block in this range, it collides with swapwrite -> the
+// fs/swap overlap hypothesis is confirmed. Returns the count.
+extern struct superblock sb;
+int
+swap_fs_overlap(void)
+{
+  int lo = SWAPBASE;
+  int hi = SWAPBASE + SWAPMAX;   // exclusive
+  int used = 0;
+  for(int b = lo; b < hi; b++){
+    struct buf *bp = bread(ROOTDEV, BBLOCK(b, sb));
+    int bi = b % BPB;
+    int m = bp->data[bi/8] & (1 << (bi % 8));
+    brelse(bp);
+    if(m)
+      used++;
+  }
+  return used;
+}
+
 void
 swapinit(void)
 {
