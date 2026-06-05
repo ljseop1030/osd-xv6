@@ -576,6 +576,7 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
+  int nseen = 0, nvalid = 0;   // DBG
 
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
@@ -583,8 +584,10 @@ dirlookup(struct inode *dp, char *name, uint *poff)
   for(off = 0; off < dp->size; off += sizeof(de)){
     if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
+    nseen++;                     // DBG
     if(de.inum == 0)
       continue;
+    nvalid++;                    // DBG
     if(namecmp(name, de.name) == 0){
       // entry matches path element
       if(poff)
@@ -594,6 +597,8 @@ dirlookup(struct inode *dp, char *name, uint *poff)
     }
   }
 
+  // DBG: only log the interesting miss (looking up a program to exec).
+  printf("[DBG] dirlookup MISS name=%s dp->size=%d nseen=%d nvalid=%d\n", name, dp->size, nseen, nvalid);
   return 0;
 }
 
